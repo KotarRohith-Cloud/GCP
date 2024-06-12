@@ -1,0 +1,97 @@
+Serverless execution for connecting cloud services
+2 versions.
+Roles:
+
+Developer - Minimum Role. Read and write access to all function related resources. Users can update, delete, deploy CF.
+viewer - No access to source code. But can list functions and see its details
+
+Usecases:
+
+Respond to  GCS File events, Webhooks(Respond to HTTP Triggers, github), Light Weight Web Apps.
+
+Deploy using Cloud shell:
+
+gcloud functions deploy hello_http \
+--runtime python310 \
+--trigger-http \
+--allow-unauthenticated \
+--entry-point hello_http \
+--source .
+
+1) can be triggered when a file is put in bucket or archived. There are many events with which we can trigger.
+
+
+gcloud services enable cloudfunctions.googleapis.com
+gcloud services enable storage.googleapis.com
+gcloud services enable bigquery.googleapis.com
+
+gsutil mb gs://gcs-demo-gaf1
+Creating gs://gcs-demo-gaf1/...
+
+bq mk peoples
+bq mk --table peoples.people name:STRING,age:INTEGER,city:STRING
+bq mk --table peoples.metadata file_name:STRING,file_size:INTEGER,upload_time:TIMESTAMP,event_type:STRING,bucket_name:STRING
+Dataset 'new-project-426017:peoples' successfully created.
+Table 'new-project-426017:peoples.people' successfully created.
+Table 'new-project-426017:peoples.metadata' successfully created.
+
+
+import io
+import pandas as pd
+from google.cloud import bigquery
+from google.cloud import storage
+
+def upload_to_bigquery(event, context):
+    client = storage.Client()
+    bucket_name = event['bucket']
+    file_name = event['name']
+    event_type = context.event_type
+    
+    bucket = client.get_bucket(bucket_name)
+    blob = bucket.blob(file_name)
+    
+    # Download the file content
+    file_content = blob.download_as_string().decode('utf-8')
+    
+    # Use io.StringIO to read the CSV data
+    data = pd.read_csv(io.StringIO(file_content))
+    
+    # Load data into BigQuery
+    bq_client = bigquery.Client()
+    dataset_id = 'peoples'
+    table_id = 'people'
+    metadata_table_id = 'metadata'
+    
+    # Insert data into the people table
+    table_ref = bq_client.dataset(dataset_id).table(table_id)
+    errors = bq_client.insert_rows_from_dataframe(table_ref, data)
+    if errors:
+        print(f'Errors occurred while inserting rows: {errors}')
+    
+    # Store metadata in BigQuery
+    file_size = blob.size
+    upload_time = blob.updated
+    
+    metadata_rows = [
+        {
+            "file_name": file_name,
+            "file_size": file_size,
+            "upload_time": upload_time.isoformat(),
+            "event_type": event_type,
+            "bucket_name": bucket_name
+        }
+    ]
+    
+    metadata_table_ref = bq_client.dataset(dataset_id).table(metadata_table_id)
+    errors = bq_client.insert_rows_json(metadata_table_ref, metadata_rows)
+    if errors:
+        print(f'Errors occurred while inserting metadata: {errors}')
+    
+    print(f'File {file_name} processed successfully.')
+
+req.txt
+-------
+
+google-cloud-storage
+google-cloud-bigquery
+pandas
